@@ -2,12 +2,16 @@
 
 defined( 'ABSPATH' ) or die();
 
+require_once rsssl_path . '/lib/admin/class-encryption.php';
+
 require_once rsssl_path . '/lib/admin/class-helper.php';
 use RSSSL\lib\admin\Helper;
+use RSSSL\lib\admin\Encryption;
 use RSSSL\Security\RSSSL_Htaccess_File_Manager;
 
 class rsssl_admin {
     use Helper;
+    use Encryption;
 	private static $_this;
 	public $wpconfig_siteurl_not_fixed   = false;
 	public $no_server_variable           = false;
@@ -44,6 +48,11 @@ class rsssl_admin {
 		add_action( 'admin_init', array( $this, 'add_privacy_info' ) );
 		add_action( 'admin_init', array( $this, 'maybe_dismiss_review_notice' ) );
 		add_action( 'rsssl_daily_cron', array( $this, 'clear_admin_notices_cache' ) );
+
+		// Clear notice cache when permalinks are updated to fix multisite issues
+		add_action( 'update_option_permalink_structure', array( $this, 'clear_admin_notices_cache' ) );
+		add_action( 'update_option_rewrite_rules', array( $this, 'clear_admin_notices_cache' ) );
+		add_action( 'update_option_permalink_structure', array( $this, 'check_permalink_change_for_custom_login_url' ), 10, 2 );
 
 		//add the settings page for the plugin
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_assets' ) );
@@ -84,8 +93,7 @@ class rsssl_admin {
 		add_action( 'upgrader_process_complete', array( $this, 'run_table_init_hook'), 10, 1);
 		add_action( 'wp_initialize_site', array( $this, 'run_table_init_hook'), 10, 1);
 		add_action( "rsssl_after_save_field", array($this, 'maybe_delete_permission_detection_option'), 101, 4 );
-
-	}
+    }
 
 	public static function this() {
 		return self::$_this;
@@ -160,10 +168,9 @@ class rsssl_admin {
         }
 
         if ( get_option('rsssl_activation') ) {
-	        if ( !class_exists('rsssl_le_hosts')) {
-		        require_once( rsssl_path . 'lets-encrypt/config/class-hosts.php');
+	        if ( function_exists( 'RSSSL_LE' ) ) {
+		        RSSSL_LE()->hosts->detect_host_on_activation();
 	        }
-	        ( new rsssl_le_hosts() )->detect_host_on_activation();
 	        $this->run_table_init_hook();
 	        do_action('rsssl_activation');
             delete_option('rsssl_activation');
@@ -200,6 +207,17 @@ class rsssl_admin {
 			$upgrade_link = '<a style="color:#2271b1;font-weight:bold" target="_blank" rel="noopener noreferrer" href="' .rsssl_link() . '">'
 			                . __( 'Improve security - Upgrade', 'really-simple-ssl' ) . '</a>';
 			array_unshift( $links, $upgrade_link );
+		}
+
+		// Always add the ID to deactivate link so JavaScript can find it reliably
+		if ( isset( $links['deactivate'] ) ) {
+			$deactivate_link_id = defined( 'rsssl_pro' ) ? 'deactivate-really-simple-security-pro' : 'deactivate-really-simple-security';
+			// Add the ID attribute to enable JavaScript event delegation
+			$links['deactivate'] = preg_replace(
+				'/<a /',
+				'<a id="' . esc_attr( $deactivate_link_id ) . '" ',
+				$links['deactivate']
+			);
 		}
 
 		return $links;
@@ -258,8 +276,8 @@ class rsssl_admin {
 		$current_date = strtotime( gmdate( 'Y-m-d H:i:s' ) );
 
 		// Define the start and end dates for the range in GMT (including specific times)
-		$start_date = strtotime( 'November 25 2024 00:00:00 GMT' );
-		$end_date   = strtotime( 'December 2 2024 23:59:59 GMT' );
+		$start_date = strtotime( 'November 24 2025 00:00:00 GMT' );
+		$end_date   = strtotime( 'December 1 2025 23:59:59 GMT' );
 
 		// Check if the current date and time falls within the date range
 		if ( $current_date >= $start_date && $current_date <= $end_date ) {
@@ -395,24 +413,32 @@ class rsssl_admin {
 			return;
 		}
 
-		do_action( 'rsssl_deactivate' );
+        if ( ! isset( $_GET['action'] )
+             || ( 'uninstall_keep_ssl' !== $_GET['action'] && 'uninstall_revert_ssl' !== $_GET['action'] ) ) {
+            return;
+        }
 
 		rsssl_clear_scheduled_hooks();
 
-		if ( isset( $_GET['action'] ) && 'uninstall_keep_ssl' === $_GET['action'] ) {
-			$this->deactivate_plugin();
+        $ssl_was_enabled = rsssl_get_option( 'ssl_enabled' );
+        $revert_to_http = isset( $_GET['action'] ) && 'uninstall_revert_ssl' === $_GET['action'];
+
+		if ( is_multisite() ) {
+			$this->deactivate_multisite_network( $ssl_was_enabled, $revert_to_http );
+		} else {
+			// Single site deactivation
+			$this->deactivate_site( $ssl_was_enabled, $revert_to_http );
 		}
 
-		if ( isset( $_GET['action'] ) && 'uninstall_revert_ssl' === $_GET['action'] ) {
-			// Update site url from https:// to http://
-			$this->remove_ssl_from_siteurl();
-            if ( ! is_multisite() ) {
-	            $this->remove_ssl_from_siteurl_in_wpconfig();
-            }
-            $this->deactivate_plugin();
-		}
+		$this->deactivate_plugin();
 
-		wp_redirect( admin_url( 'plugins.php' ) );
+		// Redirect to the correct plugins page (network admin or single site)
+        if ( is_multisite() ) {
+            $redirect_url = network_admin_url( 'plugins.php' );
+        } else {
+            $redirect_url = admin_url( 'plugins.php' );
+        }
+		wp_redirect( $redirect_url );
 		exit;
 	}
 
@@ -528,6 +554,12 @@ class rsssl_admin {
 			    'site_url_changed' => false,
 		    ];
         }
+
+		// Ensure configuration detection has run to populate required properties
+		// (do_wpconfig_loadbalancer_fix, no_server_variable, site_has_ssl option)
+		if ( ! $this->configuration_loaded ) {
+			$this->detect_configuration();
+		}
 
 		$safe_mode        = defined( 'RSSSL_SAFE_MODE' ) && RSSSL_SAFE_MODE;
 		$error            = false;
@@ -788,7 +820,7 @@ class rsssl_admin {
 					$ssl_array    = array( "define('WP_HOME','http://", "define('WP_SITEURL','http://" );
 					//now replace these urls
 					$wpconfig = str_replace( $search_array, $ssl_array, $wpconfig );
-					file_put_contents( $wpconfig_path, $wpconfig );
+					file_put_contents( $wpconfig_path, $wpconfig, LOCK_EX );
 				}
 			}
 		}
@@ -848,7 +880,7 @@ class rsssl_admin {
 			if ( is_writable( $wpconfig_path ) ) {
 				$wpconfig = preg_replace( $homeurl_pattern, "define('WP_HOME','https://", $wpconfig );
 				$wpconfig = preg_replace( $siteurl_pattern, "define('WP_SITEURL','https://", $wpconfig );
-				file_put_contents( $wpconfig_path, $wpconfig );
+				file_put_contents( $wpconfig_path, $wpconfig, LOCK_EX );
 			} else {
 				//only when siteurl or homeurl is defined in wpconfig, and wpconfig is not writable is there a possible issue because we cannot edit the defined urls.
 				$this->wpconfig_siteurl_not_fixed = true;
@@ -925,7 +957,7 @@ class rsssl_admin {
 				$wpconfig = substr_replace( $wpconfig, $rule, $pos + 1 + strlen( $insert_after ), 0 );
 			}
 
-			file_put_contents( $wpconfig_path, $wpconfig );
+			file_put_contents( $wpconfig_path, $wpconfig, LOCK_EX );
 		}
 	}
 
@@ -957,7 +989,7 @@ class rsssl_admin {
 		//remove edits
 		$wpconfig = preg_replace( '/\/\/Begin\s?Really\s?Simple\s?SSL\s?Server\s?variable\s?fix.*?\/\/END\s?Really\s?Simple\s?SSL\s?Server\s?variable\s?fix/s', '', $wpconfig );
 		$wpconfig = preg_replace( "/\n+/", "\n", $wpconfig );
-		file_put_contents( $wpconfig_path, $wpconfig );
+		file_put_contents( $wpconfig_path, $wpconfig, LOCK_EX );
 	}
 
 	/**
@@ -1022,39 +1054,99 @@ class rsssl_admin {
             return;
         }
 
+		$ssl_was_enabled = rsssl_get_option( 'ssl_enabled' );
+
 		if ( is_multisite() ) {
-			RSSSL()->multisite->deactivate();
+			$this->deactivate_multisite_network( $ssl_was_enabled, false );
 		} else {
-			$ssl_was_enabled = rsssl_get_option( 'ssl_enabled' );
+			// Single site deactivation
 			$this->deactivate_site( $ssl_was_enabled );
 		}
 	}
 
 	/**
-	 * Deactivate SSL for the currently loaded site
+	 * Deactivate SSL across all sites in a multisite network
 	 *
-	 * @param bool $ssl_was_enabled
+	 * @param bool $ssl_was_enabled Whether SSL was enabled before deactivation
+	 * @param bool $revert_to_http  Whether to revert URLs from https://
+     * to http:// (default: false, keeps https://)
 	 *
 	 * @return void
 	 */
-	public function deactivate_site( bool $ssl_was_enabled ) {
+	private function deactivate_multisite_network( bool $ssl_was_enabled, bool $revert_to_http = false ) {
+		if ( ! rsssl_user_can_manage() ) {
+			return;
+		}
 
+		delete_site_option( 'rsssl_network_activation_status' );
+		rsssl_update_option( 'ssl_enabled', false );
+
+		// Deactivate main site first
+		$site_id = get_main_site_id();
+		switch_to_blog( $site_id );
+		// Do note fire action yet, fire once at the end
+		$this->deactivate_site( $ssl_was_enabled, $revert_to_http, false );
+		restore_current_blog();
+
+		// Then deactivate all other sites
+		$args = array(
+			'number' => RSSSL()->multisite->get_total_blog_count(),
+			'offset' => 0,
+		);
+		$sites = get_sites( $args );
+		foreach ( $sites as $site ) {
+			switch_to_blog( $site->blog_id );
+			update_site_meta( $site->blog_id, 'rsssl_ssl_activated', false );
+			// Skip main site (already done)
+			if ( ! is_main_site() ) {
+				$this->deactivate_site( $ssl_was_enabled, $revert_to_http, false );
+			}
+			restore_current_blog();
+		}
+
+		// Fire the deactivation action once for the entire network
+		do_action( 'rsssl_deactivate' );
+	}
+
+	/**
+	 * Deactivate SSL for the currently loaded site
+	 *
+	 * @param bool $ssl_was_enabled Whether SSL was enabled before deactivation
+	 * @param bool $revert_to_http  Whether to revert URLs from https:// to http:// (default: false, keeps https://)
+	 * @param bool $fire_action     Whether to fire the rsssl_deactivate action (default: true). Set to false during multisite loops.
+	 *
+	 * @return void
+	 */
+	public function deactivate_site( bool $ssl_was_enabled, bool $revert_to_http = false, bool $fire_action = true ) {
 		if ( ! rsssl_user_can_manage() ) {
 			return;
 		}
 
 		$this->remove_secure_cookie_settings();
-		if ( $ssl_was_enabled ) {
+		if ( $ssl_was_enabled && $revert_to_http ) {
 			$this->remove_ssl_from_siteurl();
 			if ( ! is_multisite() || is_main_site() ) {
 				$this->remove_ssl_from_siteurl_in_wpconfig();
 				$this->remove_wpconfig_edit();
-				rsssl_remove_htaccess_security_edits();
 			}
 		}
 
-		do_action( 'rsssl_deactivate' );
-		rsssl_update_option( 'ssl_enabled', false );
+		// Remove htaccess security edits
+		// Preserve redirect when staying on HTTPS, remove it when reverting to HTTP
+		if ( ! is_multisite() || is_main_site() ) {
+			$clear_htaccess_redirect = $revert_to_http;
+			rsssl_remove_htaccess_security_edits( $clear_htaccess_redirect );
+		}
+
+		// Fire action only if requested (suppressed during multisite loops)
+		if ( $fire_action ) {
+			do_action( 'rsssl_deactivate' );
+		}
+
+		// Only disable ssl_enabled when actually reverting to HTTP
+		if ( $revert_to_http ) {
+			rsssl_update_option( 'ssl_enabled', false );
+		}
 	}
 
 	/**
@@ -1089,7 +1181,7 @@ class rsssl_admin {
 			$wpconfig = file_get_contents( $wpconfig_path );
 			$wpconfig = preg_replace( '/\/\/Begin\s?Really\s?Simple\s?SSL\s?session\s?cookie\s?settings.*?\/\/END\s?Really\s?Simple\s?SSL\s?cookie\s?settings/s', '', $wpconfig );
 			$wpconfig = preg_replace( "/\n+/", "\n", $wpconfig );
-			file_put_contents( $wpconfig_path, $wpconfig );
+			file_put_contents( $wpconfig_path, $wpconfig, LOCK_EX );
 		}
 	}
 
@@ -1978,16 +2070,12 @@ class rsssl_admin {
 		if ( ! $this->is_settings_page() ) {
 			$cached_notices = get_option( 'rsssl_admin_notices' );
 			if ( 'empty' === $cached_notices ) {
-				return [];
-			}
-			if ( false !== $cached_notices ) {
+				// Clear the invalid cache entry
+				delete_option( 'rsssl_admin_notices' );
+				// Don't return empty array, continue to generate fresh notices
+			} elseif ( false !== $cached_notices && is_array($cached_notices) ) {
 				return $cached_notices;
 			}
-		}
-		//not cached, set a default here
-		//only cache if the admin_notices are retrieved.
-		if ( $args['admin_notices'] ) {
-			update_option( 'rsssl_admin_notices', 'empty' );
 		}
 
 		$rules = $this->get_redirect_rules( true );
@@ -2790,7 +2878,7 @@ class rsssl_admin {
 					$wpconfig = substr_replace( $wpconfig, $rule, $pos + 1 + strlen( $insert_after ), 0 );
 				}
 
-				file_put_contents( $wpconfig_path, $wpconfig );
+				file_put_contents( $wpconfig_path, $wpconfig, LOCK_EX );
 			}
 		}
 	}
@@ -2960,8 +3048,7 @@ class rsssl_admin {
 			$updated = str_replace( 'Really Simple SSL', 'Really Simple Security', $htaccess );
 
 			if ( $updated !== $htaccess ) {
-                error_log( 'Updating branding in .htaccess' );
-				file_put_contents( $this->htaccess_file(), $updated );
+				file_put_contents( $this->htaccess_file(), $updated, LOCK_EX );
 			}
 		}
 	}
@@ -2981,7 +3068,7 @@ class rsssl_admin {
 			   str_replace( "Really Simple SSL", "Really Simple Security", $wp_config );
 		   }
 
-		   file_put_contents( $this->wpconfig_path(), $wp_config );
+		   file_put_contents( $this->wpconfig_path(), $wp_config, LOCK_EX );
 	   }
     }
 
@@ -3029,10 +3116,12 @@ class rsssl_admin {
         // Activate Vulnerability Scanner
         rsssl_update_option( 'enable_vulnerability_scanner', true );
 
-        // Activate essential WordPress hardening features
-        $recommended_hardening_fields = RSSSL()->onboarding->get_hardening_fields();
-        foreach ( $recommended_hardening_fields as $field ) {
-            rsssl_update_option( $field, true );
+        if (isset(RSSSL()->settingsConfigService)) {
+            // Activate essential WordPress hardening features
+            $recommended_hardening_fields = RSSSL()->settingsConfigService->getRecommendedHardeningSettings();
+            foreach ( $recommended_hardening_fields as $field ) {
+                rsssl_update_option( $field, true );
+            }
         }
 
         // Enable Email login protection
@@ -3104,6 +3193,45 @@ class rsssl_admin {
 
 		return [];
 	}
+
+	/**
+     * Method detects if permalink structure changed from non-plain to plain,
+     * and if so: disable the custom login url feature and set a flag in the
+     * database to trigger an admin notice by
+     * {@see rsssl_premium_security_notices}. To trigger the admin notice
+     * properly we also have to clear the admin notices cache.
+	 */
+	public function check_permalink_change_for_custom_login_url( $old_value, $new_value ) {
+		if ( ! rsssl_user_can_manage() ) {
+			return;
+		}
+
+		$was_plain = empty( $old_value );
+		$is_plain = empty( $new_value );
+
+		if ( ! $was_plain && $is_plain && rsssl_get_option( 'change_login_url_enabled' ) == 1 ) {
+			rsssl_update_option( 'change_login_url_enabled', false );
+			update_option( 'rsssl_permalink_changed_to_plain', true, false );
+			$this->clear_admin_notices_cache();
+		}
+
+		if ( $was_plain && ! $is_plain ) {
+			delete_option( 'rsssl_permalink_changed_to_plain' );
+			$this->clear_admin_notices_cache();
+		}
+	}
+
+    /**
+     * Wrapper function that delegates the onboarding reset to the global onboardingService
+     *
+     * @return void
+     */
+    public function reset_onboarding() {
+        if ( class_exists( '\ReallySimplePlugins\RSS\Core\Services\GlobalOnboardingService' ) ) {
+            $globalOnboardingService = new \ReallySimplePlugins\RSS\Core\Services\GlobalOnboardingService();
+            $globalOnboardingService->resetOnboarding();
+        }
+    }
 
 } //class closure
 
