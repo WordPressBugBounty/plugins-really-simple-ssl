@@ -4,7 +4,7 @@
 
 namespace Composer\Autoload;
 
-class ComposerStaticInit8e35ff558754a0d14b9b074ba49d0b68
+class ComposerStaticInite16c8ab67bf60a9e04303a69a741ce87
 {
     public static $files = array (
         'd767e4fc2dc52fe66584ab8c6684783e' => __DIR__ . '/..' . '/adbario/php-dot-notation/src/helpers.php',
@@ -95,9 +95,9 @@ class ComposerStaticInit8e35ff558754a0d14b9b074ba49d0b68
     public static function getInitializer(ClassLoader $loader)
     {
         return \Closure::bind(function () use ($loader) {
-            $loader->prefixLengthsPsr4 = ComposerStaticInit8e35ff558754a0d14b9b074ba49d0b68::$prefixLengthsPsr4;
-            $loader->prefixDirsPsr4 = ComposerStaticInit8e35ff558754a0d14b9b074ba49d0b68::$prefixDirsPsr4;
-            $loader->classMap = ComposerStaticInit8e35ff558754a0d14b9b074ba49d0b68::$classMap;
+            $loader->prefixLengthsPsr4 = ComposerStaticInite16c8ab67bf60a9e04303a69a741ce87::$prefixLengthsPsr4;
+            $loader->prefixDirsPsr4 = ComposerStaticInite16c8ab67bf60a9e04303a69a741ce87::$prefixDirsPsr4;
+            $loader->classMap = ComposerStaticInite16c8ab67bf60a9e04303a69a741ce87::$classMap;
 
         }, null, ClassLoader::class);
     }
