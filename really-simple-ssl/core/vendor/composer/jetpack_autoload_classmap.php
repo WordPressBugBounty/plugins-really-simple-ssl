@@ -374,6 +374,10 @@ return array(
 		'version' => 'dev-main',
 		'path'    => $baseDir . '/app/Services/LicenseService.php'
 	),
+	'ReallySimplePlugins\\RSS\\Core\\Services\\OutboundUrlService' => array(
+		'version' => 'dev-main',
+		'path'    => $baseDir . '/app/Services/OutboundUrlService.php'
+	),
 	'ReallySimplePlugins\\RSS\\Core\\Services\\RelatedPluginService' => array(
 		'version' => 'dev-main',
 		'path'    => $baseDir . '/app/Services/RelatedPluginService.php'

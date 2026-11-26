@@ -88,6 +88,7 @@ return array(
     'ReallySimplePlugins\\RSS\\Core\\Services\\EmailService' => $baseDir . '/app/Services/EmailService.php',
     'ReallySimplePlugins\\RSS\\Core\\Services\\GlobalOnboardingService' => $baseDir . '/app/Services/GlobalOnboardingService.php',
     'ReallySimplePlugins\\RSS\\Core\\Services\\LicenseService' => $baseDir . '/app/Services/LicenseService.php',
+    'ReallySimplePlugins\\RSS\\Core\\Services\\OutboundUrlService' => $baseDir . '/app/Services/OutboundUrlService.php',
     'ReallySimplePlugins\\RSS\\Core\\Services\\RelatedPluginService' => $baseDir . '/app/Services/RelatedPluginService.php',
     'ReallySimplePlugins\\RSS\\Core\\Services\\SecureSocketsService' => $baseDir . '/app/Services/SecureSocketsService.php',
     'ReallySimplePlugins\\RSS\\Core\\Services\\SettingsConfigService' => $baseDir . '/app/Services/SettingsConfigService.php',

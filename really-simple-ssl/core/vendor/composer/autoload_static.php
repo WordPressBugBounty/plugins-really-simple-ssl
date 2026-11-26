@@ -126,6 +126,7 @@ class ComposerStaticInitb362f03b12b29b02131a59d9d1231943
         'ReallySimplePlugins\\RSS\\Core\\Services\\EmailService' => __DIR__ . '/../..' . '/app/Services/EmailService.php',
         'ReallySimplePlugins\\RSS\\Core\\Services\\GlobalOnboardingService' => __DIR__ . '/../..' . '/app/Services/GlobalOnboardingService.php',
         'ReallySimplePlugins\\RSS\\Core\\Services\\LicenseService' => __DIR__ . '/../..' . '/app/Services/LicenseService.php',
+        'ReallySimplePlugins\\RSS\\Core\\Services\\OutboundUrlService' => __DIR__ . '/../..' . '/app/Services/OutboundUrlService.php',
         'ReallySimplePlugins\\RSS\\Core\\Services\\RelatedPluginService' => __DIR__ . '/../..' . '/app/Services/RelatedPluginService.php',
         'ReallySimplePlugins\\RSS\\Core\\Services\\SecureSocketsService' => __DIR__ . '/../..' . '/app/Services/SecureSocketsService.php',
         'ReallySimplePlugins\\RSS\\Core\\Services\\SettingsConfigService' => __DIR__ . '/../..' . '/app/Services/SettingsConfigService.php',
